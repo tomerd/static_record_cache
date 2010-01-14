@@ -397,22 +397,45 @@ module ActsAsStaticRecord
         nil
       end
     end
-
+       
     # Clear (and reload) the record cache
     def clear_static_record_cache
-      @static_record_cache = nil
+      puts "clear_static_record_cache"
+      clear_in_memory_cache
+      clear_disk_cache
     end
+    
+    def clear_in_memory_cache
+      puts "clear_in_memory_cache"
+      @static_record_cache = nil
+      @static_record_cache_timestamp = nil
+    end 
+    
+    def clear_disk_cache
+      puts "clear_disk_cache"
+      return unless File.exists?(disk_cache_file_name)
+      File.delete(disk_cache_file_name)
+    rescue
+      # IO error? perhaps 2 processes trying to write/delete the same file?
+      puts $!     
+    end     
 
     # The static record cache
     def static_record_cache
-      @static_record_cache||= initialize_static_record_cache
+      # clear in-memory if disk version is newer or in-memory expired 
+      clear_in_memory_cache if reload_in_memory_cache_required?
+      @static_record_cache ||= initialize_static_record_cache
     end
-
-    protected
 
     # Find all the record and initialize the cache
     def initialize_static_record_cache#:nodoc:
-      return unless @static_record_cache.nil?
+      # try in memory
+      return @static_record_cache unless @static_record_cache.nil?
+      # try disk
+      read_cache_from_disk
+      return @static_record_cache unless @static_record_cache.nil?
+      # load form database
+      puts "read_from_database"
       records = self.find_without_static_record(:all, acts_as_static_record_options[:find]||{})
       @static_record_cache = records.inject({:primary_key => {}, :key => {}, :calc => {}}) do |cache, record|
         cache[:primary_key][record.send(self.primary_key)] = record
@@ -421,10 +444,66 @@ module ActsAsStaticRecord
         end
         cache
       end
+      # set time stamp and write to disk
+      write_cache_to_disk        
     end
   end
+  
+  # write the cach to disk (for sharing between processes)
+  def write_cache_to_disk
+    puts "write_cache_to_disk"
+    return unless @static_record_cache
+    FileUtils.mkdir_p(File.dirname(disk_cache_file_name))
+    File.delete(disk_cache_file_name) if File.exists?(disk_cache_file_name)
+    # serialize
+    File.open(disk_cache_file_name, "w") {|f| f.write(Marshal.dump(@static_record_cache)) }
+    # set time stamp
+    @in_memory_cache_timestamp = Time.new
+    @static_record_cache
+  rescue
+    # IO error? perhaps 2 processes trying to write/delete the same file?
+    puts $!
+  end
+  
+  # read the cach from disk (for sharing between processes)
+  def read_cache_from_disk
+    puts "read_cache_from_disk"   
+    # expired?
+    return unless disk_cache_timestamp > 1.hours.ago
+    data = File.read(disk_cache_file_name)
+    return unless data    
+    # deserialize
+    begin
+      @static_record_cache = Marshal.load(data)
+      # set time stamp
+      @in_memory_cache_timestamp = Time.new      
+    rescue
+      # protect against bad format
+      puts "error reading disk cache: #{$!}, recovering"
+      clear_disk_cache
+    end
+  end  
+    
+  def disk_cache_timestamp
+    return Time.at(0) if !File.exists?(disk_cache_file_name)
+    File.ctime(disk_cache_file_name)
+  end
+  
+  def disk_cache_file_name
+    @disk_cache_file_name ||= Rails.root.join(RAILS_ROOT, "tmp", "static_record_cache", "#{self.to_s.downcase}.tmp")
+  end
 
+  def in_memory_cache_timestamp
+    @in_memory_cache_timestamp ||= Time.at(0)
+  end
 
+  def reload_in_memory_cache_required? 
+    return false if Time.at(0) == in_memory_cache_timestamp
+    return true if in_memory_cache_timestamp < 1.hours.ago
+    return true if disk_cache_timestamp > in_memory_cache_timestamp
+    false
+  end
+  
   # This module is designed to define finder methods such as find_by_id to
   # search through the cache if no additional arguments are specified
   # The likelyhood of this working with < Rails 2.3 is pretty low.
