@@ -400,19 +400,16 @@ module ActsAsStaticRecord
        
     # Clear (and reload) the record cache
     def clear_static_record_cache
-      puts "clear_static_record_cache"
       clear_in_memory_cache
       clear_disk_cache
     end
     
     def clear_in_memory_cache
-      puts "clear_in_memory_cache"
       @static_record_cache = nil
       @static_record_cache_timestamp = nil
     end 
     
     def clear_disk_cache
-      puts "clear_disk_cache"
       return unless File.exists?(disk_cache_file_name)
       File.delete(disk_cache_file_name)
     rescue
@@ -435,7 +432,6 @@ module ActsAsStaticRecord
       read_cache_from_disk
       return @static_record_cache unless @static_record_cache.nil?
       # load form database
-      puts "read_from_database"
       records = self.find_without_static_record(:all, acts_as_static_record_options[:find]||{})
       @static_record_cache = records.inject({:primary_key => {}, :key => {}, :calc => {}}) do |cache, record|
         cache[:primary_key][record.send(self.primary_key)] = record
@@ -451,7 +447,6 @@ module ActsAsStaticRecord
   
   # write the cach to disk (for sharing between processes)
   def write_cache_to_disk
-    puts "write_cache_to_disk"
     return unless @static_record_cache
     FileUtils.mkdir_p(File.dirname(disk_cache_file_name))
     File.delete(disk_cache_file_name) if File.exists?(disk_cache_file_name)
@@ -466,8 +461,7 @@ module ActsAsStaticRecord
   end
   
   # read the cach from disk (for sharing between processes)
-  def read_cache_from_disk
-    puts "read_cache_from_disk"   
+  def read_cache_from_disk   
     # expired?
     return unless disk_cache_timestamp > 1.hours.ago
     data = File.read(disk_cache_file_name)
